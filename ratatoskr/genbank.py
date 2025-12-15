@@ -166,8 +166,11 @@ def retrieve_missing_genome_info(lpsn_types, api_key):
         return has_genome + missing_genome
     
     logger.info("Processing genome information.")
-    
-    df = pl.LazyFrame(data_list).select([pl.col('accession'), pl.col('organism').struct.field("*"), pl.col('assembly_info').struct.field(['assembly_level','biosample']), pl.col('checkm_info').struct.field('checkm_species_tax_id').alias('checkm_tax_id'), ])
+
+    df = pl.LazyFrame(data_list)
+    if 'checkm_info' not in df.collect_schema().names():
+        df = df.with_columns(pl.struct({'checkm_species_tax_id': None}).alias('checkm_info'))
+    df= df.select([pl.col('accession'), pl.col('organism').struct.field("*"), pl.col('assembly_info').struct.field(['assembly_level','biosample']), pl.col('checkm_info').struct.field('checkm_species_tax_id').alias('checkm_tax_id'), ])
     df = df.with_columns(pl.col('infraspecific_names').struct.field("strain").alias('infraspecific_names'), pl.col('biosample').struct.field('strain').alias('biosample'))
     enum_type = pl.Enum(("Complete Genome", "Chromosome", "Scaffold", "Contig"))
     df = df.with_columns(strain=pl.concat_list(pl.col('biosample'), pl.col('infraspecific_names')).list.unique()).unique().sort(pl.col('assembly_level').cast(enum_type)).collect().group_by('tax_id').all()
