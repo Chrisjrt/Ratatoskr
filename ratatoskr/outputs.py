@@ -149,6 +149,10 @@ def output_fatty_acid_profile_data(lpsn_types, output_path):
     all_dict = {x: [] for x in ['Name'] + sorted((list(all_fatty_acids)))}
 
     for ts in lpsn_types:
+        if ts.type_names is None:
+            ts.type_names = [""]
+        if len(ts.type_names) == 0:
+            ts.type_names = [""]
         type_name = " ".join([ts.parent_subspecies, ts.type_names[0]] if ts.parent_subspecies is not None else [ts.parent_species, ts.type_names[0]])
         all_dict['Name'].append(type_name)
         for fatty_acid in all_fatty_acids:
@@ -184,6 +188,10 @@ def output_API_results_data(lpsn_types, output_path):
     for api in apis:
         all_dict = {api: {x: [] for x in ['Name'] + sorted(tests[api])}}
         for ts in lpsn_types:
+            if ts.type_names is None:
+                ts.type_names = [""]
+            if len(ts.type_names) == 0:
+                ts.type_names = [""]
             type_name = " ".join([ts.parent_subspecies, ts.type_names[0]] if ts.parent_subspecies is not None else [ts.parent_species, ts.type_names[0]])
             all_dict[api]['Name'].append(type_name)
             for test in tests[api]:
@@ -224,6 +232,10 @@ def output_general_characteristics(lpsn_types, output_path):
                                          "Compound_production", "Metabolite_production", "Metabolite_utilization"])]
     
     for ts in lpsn_types:
+        if ts.type_names is None:
+            ts.type_names = [""]
+        if len(ts.type_names) == 0:
+            ts.type_names = [""]
         type_name = " ".join([ts.parent_subspecies, ts.type_names[0]] if ts.parent_subspecies is not None else [ts.parent_species, ts.type_names[0]])
         general_phenotypic_tsv.append(get_general_phenotypic_data(ts, type_name))
     
