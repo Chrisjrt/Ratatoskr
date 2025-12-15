@@ -132,15 +132,65 @@ def filter_dataframe(df, input, taxonomic_level):
     Check if the input taxon is a synonym in LPSN DataFrame.
     """
     logger.info(f"Filtering LPSN data for {taxonomic_level} {input}.")
-
     lpsn_hits = (
         df.filter(pl.col(f"parent_{taxonomic_level}").str.to_lowercase() == input.lower())
           .filter(~((pl.col(f"parent_species").is_null()) & (pl.col(f"parent_subspecies").is_null())))
     ).collect()
+
     
     if len(lpsn_hits) == 0:
-        logger.error(f"Could not uniquely identify {taxonomic_level} {input} on LPSN.")
-        sys.exit(1)
+        
+        logger.error(f"Could not uniquely identify {input} as {taxonomic_level} on LPSN.")
+        # sys.exit(1)
+        level_df = (df.lazy()
+        # 1) build a per-column equality predicate
+        .with_columns(
+            [
+                (pl.col(f"parent_{lvl}").str.to_lowercase() == input.lower())
+                .alias(f"match_{lvl}")
+                for lvl in accepted_ranks
+            ]
+        )
+        # 2) filter rows where any of the taxonomic levels match
+        .filter(pl.any_horizontal([pl.col(f"match_{lvl}") for lvl in accepted_ranks]))
+        # 3) keep only rows where at least one of species/subspecies is non-null
+        .filter(
+            ~(
+                (pl.col("parent_species").is_null())
+                & (pl.col("parent_subspecies").is_null())
+            )
+        ).collect())
+        # 4) add a column indicating which taxonomic level matched
+        if len(level_df) == 0:
+            logger.error(f"No matches found for {input} at any taxonomic level on LPSN.")
+            print(df.filter(pl.col(f"parent_class").str.to_lowercase() == input.lower()).collect())
+            sys.exit(1)
+        else:
+            taxonomic_level =level_df.with_columns(
+                pl.when(pl.col("match_species")).then(pl.lit("species"))
+                .when(pl.col("match_subspecies")).then(pl.lit("subspecies"))
+                .when(pl.col("match_genus")).then(pl.lit("genus"))
+                .when(pl.col("match_family")).then(pl.lit("family"))
+                .when(pl.col("match_order")).then(pl.lit("order"))
+                .when(pl.col("match_class")).then(pl.lit("class"))
+                .when(pl.col("match_phylum")).then(pl.lit("phylum"))
+                .when(pl.col("match_kingdom")).then(pl.lit("kingdom"))
+                .when(pl.col("match_domain")).then(pl.lit("domain"))
+                .otherwise(pl.lit(None))
+                .alias("matched_level")
+            )['matched_level'].first()
+        if taxonomic_level:
+            logger.info(f"Input taxon {input} matched at level {taxonomic_level}. Retrying filter.")
+            lpsn_hits = (
+                df.filter(pl.col(f"parent_{taxonomic_level}").str.to_lowercase() == input.lower())
+                  .filter(~((pl.col(f"parent_species").is_null()) & (pl.col(f"parent_subspecies").is_null())))
+            ).collect()
+            if len(lpsn_hits) == 0:
+                logger.error(f"Could not uniquely identify {taxonomic_level} as {input} on LPSN after second attempt.")
+                sys.exit(1)
+        else:
+            logger.error(f"Could not uniquely identify {taxonomic_level} as {input} on LPSN after second attempt.")
+            sys.exit(1)
    
     return lpsn_hits
 
