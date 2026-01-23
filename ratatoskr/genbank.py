@@ -1,0 +1,346 @@
+from datetime import datetime
+import os
+import subprocess
+import sys
+import asyncio
+import aiohttp
+
+from Bio import Entrez, SeqIO
+from loguru import logger
+import tqdm
+os.environ["POLARS_MAX_THREADS"] = "1"
+import polars as pl
+
+from ratatoskr.misc import get_haves_and_have_nots, fetch_data, tidy_genome_dir
+from ratatoskr.utils import get_credentials, unzip_file, make_dir, move_and_rename, delete_thing
+from ratatoskr.outputs import output_metadata
+
+
+def get_genbank_api_info(dev_mode=False):
+    """
+    Set up the LPSN client.
+    """
+    email, _, api_key = get_credentials(email=True, password=False, api_key=True, api_being_accessed="genbank", dev_mode=dev_mode)
+    Entrez.email = email
+    Entrez.api_key = api_key
+    return email, api_key
+
+
+async def request_ncbi_taxon_ids(query_terms, api_key, sem, pbar=None):
+    headers = {
+        "accept": "application/json",
+        "api-key": api_key
+    }
+    session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60000),connector=aiohttp.TCPConnector(limit=9))
+    sem = asyncio.Semaphore(9)
+    urls = [f"https://api.ncbi.nlm.nih.gov/datasets/v2/taxonomy/taxon/{"%2C".join(subset).replace(" ", "%20")}?returned_content=TAXIDS&page_size=1000" for subset in [query_terms[i:i + 100] for i in range(0, len(query_terms), 100)]]
+    query_lengths = [len(subset) for subset in [query_terms[i:i + 100] for i in range(0, len(query_terms), 100)]]
+    parrallel_tasks = [fetch_data(url, session, headers, sem, 'taxonomy_nodes', pbar, query_length) for url, query_length in zip(urls, query_lengths)]
+    data_list = await asyncio.gather(*parrallel_tasks)
+    await session.close()
+    return [item for sublist in data_list for item in sublist if sublist is not None]
+    
+
+def retrieve_ncbi_taxon_ids(lpsn_types, api_key):
+
+    logger.info("Retrieving NCBI Taxon IDs for LPSN type strains.")
+    
+    query_terms = []
+    
+    has_ncbi_taxid, missing_ncbi_taxid = get_haves_and_have_nots(lpsn_types, "species_ncbi_tax_id")
+    
+    for type_strain in missing_ncbi_taxid:
+        if type(type_strain.binomial_synonyms) != list:
+            type_strain.binomial_synonyms = type_strain.binomial_synonyms.split(",")
+        query_terms.extend(type_strain.binomial_synonyms)
+    
+    pbar = tqdm.tqdm(total=len(query_terms), desc="Requesting NCBI Taxon IDs", unit="query", ncols=100, colour="magenta")
+    data_list = asyncio.run(request_ncbi_taxon_ids(query_terms,  api_key, sem=None, pbar=pbar))
+
+    if len (data_list) == 0:
+        logger.info("No NCBI Taxon IDs retrieved from GenBank. Continuing")
+        return has_ncbi_taxid + missing_ncbi_taxid
+
+    pbar.close()
+    data_dict = pl.DataFrame(data_list).explode('query').select(pl.col('query'), pl.col('taxonomy').struct.field("*")).drop_nulls().rows_by_key('query', unique=True)
+    
+    for type_strain in tqdm.tqdm(missing_ncbi_taxid, desc="Processing NCBI Taxon IDs", unit="type strain", ncols=100, colour="magenta"):
+        if type(type_strain.binomial_synonyms) != list:
+            type_strain.binomial_synonyms = type_strain.binomial_synonyms.split(",")
+        hits = []
+        for synonym in type_strain.binomial_synonyms:
+            if data_dict.get(synonym) is not None:
+                hits.append(*data_dict.get(synonym))
+        type_strain.species_ncbi_tax_id = hits
+        if len(hits) > 1:
+            logger.debug(f"Multiple Taxon IDs found for {type_strain.parent_species}. Will carry forward using all matches.")
+        if len(hits) == 0:
+            logger.debug(f"No Taxon ID found for {type_strain.parent_species}")
+            type_strain.species_ncbi_tax_id = []
+
+    return has_ncbi_taxid + missing_ncbi_taxid
+            
+def retrieve_missing_16S_info(lpsn_types, email, api_key):
+    """
+    Retrieve missing 16S rRNA gene information from GenBank for the given LPSN type strains.
+    """
+    logger.info("Retrieving missing 16S rRNA gene information from GenBank.")
+    Entrez.api_key = api_key
+    has_rRNA, missing_rRNA = get_haves_and_have_nots(lpsn_types, "rRNA_acc")
+    
+    for type_strain in tqdm.tqdm(missing_rRNA, desc="Retrieving missing 16S rRNA gene info", unit="type strain", ncols=100, colour="magenta"):
+        for i in [item for v in [type_strain.strain_ncbi_tax_id,type_strain.species_ncbi_tax_id] for item in (v if isinstance(v, list) else [v])]:
+            if i is not None:
+                handle = Entrez.esearch(db="nucleotide", term=f"txid{i}[Organism:exp] AND 16S[Title]", email = email, retmax=10**6)
+                try:
+                    handle = Entrez.read(handle)
+                except Exception as e:
+                    logger.error(f"Error reading Entrez handle for type strain {type_strain.parent_species} with taxid {i}: {e}")
+                    continue
+                if handle.get("Count") != "0":
+                    id = handle.get("IdList")
+                    record = [x for x in Entrez.read(Entrez.esummary(db="nucleotide", id=id, email=email)) if 750 <= int(x.get("Length")) <= 2500 and x.get("Status") == "live" and len(x.get("AccessionVersion")) < 12]
+                    if len(record) > 0:
+                        record = sorted(record, key=lambda x: datetime.strptime(x.get("CreateDate"), "%Y/%m/%d"))[0].get("AccessionVersion")
+                        type_strain.rRNA_acc = record
+                        break
+        if type_strain.rRNA_acc is None: # if still none after taxid search, do name/strain search
+            binomial_search_term = " OR ".join([f'("{x}"[Organism])' for x in type_strain.binomial_synonyms])
+            try:
+                strain_search_term = " OR ".join(set([f'("{x.replace(" ", y)}"[Strain])' for x in type_strain.type_names for y in ["_", "-", "."]]))
+            except Exception as e:
+                logger.error(f"Error creating strain search term for type strain {type_strain.parent_species}: {e}")
+                strain_search_term = ""
+            try:
+                handle = Entrez.esearch(db="nucleotide", term=f"({binomial_search_term}) AND ({strain_search_term}) AND (16S[Title])", email = email, retmax=10**6)
+                handle = Entrez.read(handle)
+            except Exception as e:
+                logger.error(f"Error searching Entrez for type strain {type_strain.parent_species}: {e}")
+                continue
+    
+            if handle.get("Count") != "0":
+                id = handle.get("IdList")
+                record = [x for x in Entrez.read(Entrez.esummary(db="nucleotide", id=id, email=email)) if 750 <= int(x.get("Length")) <= 2500 and x.get("Status") == "live"]
+                if len(record) > 0:
+                    record = sorted(record, key=lambda x: datetime.strptime(x.get("CreateDate"), "%Y/%m/%d"))
+                    if len(record) > 0:
+                        record = record[0].get("AccessionVersion")
+                    type_strain.rRNA_acc = record.split(".")[0]
+
+    return has_rRNA + missing_rRNA
+
+
+async def request_ncbi_genomes(query_terms, api_key, pbar):
+    headers = {
+        "accept": "application/json",
+        "api-key": api_key
+    }
+    session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60000),connector=aiohttp.TCPConnector(limit=9))
+    sem = asyncio.Semaphore(9)
+    urls = [f"https://api.ncbi.nlm.nih.gov/datasets/v2/genome/taxon/{"%2C".join(subset).replace(" ", "%20")}/dataset_report?returned_content=COMPLETE&page_size=1000" for subset in [query_terms[i:i + 100] for i in range(0, len(query_terms), 100)]]
+    query_lengths = [len(subset) for subset in [query_terms[i:i + 100] for i in range(0, len(query_terms), 100)]]
+    parrallel_tasks = [fetch_data(url, session, headers, sem, 'reports', pbar, query_length) for url, query_length in zip(urls, query_lengths)]
+    async with sem:
+        data_list = await asyncio.gather(*parrallel_tasks)
+    await session.close()
+    return [item for sublist in data_list for item in sublist if sublist is not None]
+
+
+def retrieve_missing_genome_info(lpsn_types, api_key):
+    
+    logger.info("Retrieving genome information from GenBank.")
+
+    query_terms = []
+    
+    has_genome, missing_genome = get_haves_and_have_nots(lpsn_types, "genome_acc")        
+
+    query_terms = [str(ncbi_id) for type_strain in missing_genome for ncbi_id in type_strain.species_ncbi_tax_id if type_strain.species_ncbi_tax_id is not None]
+    
+    pbar = tqdm.tqdm(total=len(query_terms), desc="Retrieving genome info", unit="type strain", ncols=100, colour="magenta")
+    data_list = asyncio.run(request_ncbi_genomes(query_terms, api_key, pbar))
+    pbar.close()
+    
+    logger.debug(f"Retrieved {len(data_list)} genome records from GenBank.")
+    if len(data_list) == 0:
+        logger.info("No genome information retrieved from GenBank. Continuing")
+        return has_genome + missing_genome
+    
+    logger.info("Processing genome information.")
+    
+    df = pl.LazyFrame(data_list).select([pl.col('accession'), pl.col('organism').struct.field("*"), pl.col('assembly_info').struct.field(['assembly_level','biosample']), pl.col('checkm_info').struct.field('checkm_species_tax_id').alias('checkm_tax_id'), ])
+    df = df.with_columns(pl.col('infraspecific_names').struct.field("strain").alias('infraspecific_names'), pl.col('biosample').struct.field('strain').alias('biosample'))
+    enum_type = pl.Enum(("Complete Genome", "Chromosome", "Scaffold", "Contig"))
+    df = df.with_columns(strain=pl.concat_list(pl.col('biosample'), pl.col('infraspecific_names')).list.unique()).unique().sort(pl.col('assembly_level').cast(enum_type)).collect().group_by('tax_id').all()
+    
+    for type_strain in tqdm.tqdm(missing_genome, desc="Processing missing genome info", unit="type strain", ncols=100, colour="magenta"):
+        filtered = df.filter(pl.col('tax_id').is_in(type_strain.species_ncbi_tax_id)| pl.col("checkm_tax_id").list.set_intersection(type_strain.species_ncbi_tax_id).list.len() > 0)
+        if len(filtered) > 0:
+            try:
+                if type(type_strain.type_names) == str:
+                    type_strain.type_names = [ts.strip() for ts in type_strain.type_names.split(",")]
+                strain_filtered = filtered.explode(['accession', 'assembly_level', 'strain']).filter(pl.col('strain').list.eval(pl.element().is_in(type_strain.type_names)).list.any())
+            except Exception as e:
+                logger.error(f"Error filtering strains for {type_strain}: {e}")
+            if len(strain_filtered) > 0:
+                best_hit = strain_filtered.rows(named=True)[0]
+                type_strain.genome_acc = {"accession": best_hit['accession'].split('.')[0], "assembly level": best_hit['assembly_level']}
+            else:
+                logger.debug(f"No genome data found for {type_strain.parent_species} matching type strain names. Just FYI")
+        else:
+            logger.debug(f"No genome data found for {type_strain.parent_species}. Just FYI")
+        
+
+    return has_genome + missing_genome
+
+
+def retrieve_genome_sequences(lpsn_types, output_path, threads, api_key):
+
+    logger.info("Retrieving genome sequences from GenBank.")
+
+    has_genome_seq, missing_genome_seq = get_haves_and_have_nots(lpsn_types, "genome_acc")
+
+    with open(output_path / "genome_accessions.txt", "w") as f:
+        accessions = {
+            x.genome_acc["accession"]
+            for x in has_genome_seq
+            if x.genome_acc is not None
+        }
+        if len(accessions) == 0:
+            logger.info("No genome accessions found for any type strains. Skipping genome sequence retrieval.")
+            return
+        f.write("\n".join(accessions))
+
+    make_dir(output_path / "sequences" / "genomes")
+    command = f'datasets download genome accession --inputfile {output_path}/genome_accessions.txt --api-key {api_key} --filename {output_path}/sequences/genomes/genomes.zip --dehydrated --include genome,gbff'
+    logger.info("Downloading dehydrated genome sequences from GenBank")
+    
+    info = subprocess.run(command, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    
+    try:
+        info = subprocess.run(command, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error downloading genome sequences: {e.stderr}")
+        sys.exit(1)
+   
+
+def rehydrate_genome_sequences(output_path, threads, input_taxon):
+
+    logger.info("Rehydrating downloaded genome sequences.")
+    try:
+        unzip_file(output_path / "sequences" / "genomes" / "genomes.zip", output_path / "sequences" / "genomes")
+    except FileNotFoundError:
+        logger.warning("No genomes.zip file found to unzip. Skipping genome rehydration.")
+        return
+
+    command = f'datasets rehydrate --directory {output_path / "sequences" / "genomes"} --max-workers {threads}'
+
+    try:
+        info = subprocess.Popen(command, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        while True:
+            output = info.stdout.readline()
+            if not output:
+                break
+            logger.info(output.strip())
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error rehydrating genome sequences: {e.stderr}")
+        sys.exit(1)
+
+
+def check_16S_retrieval(output_path, input_taxon, accessions):
+
+    retrieved_seqs = []    
+    for record in SeqIO.parse( output_path / "sequences" / "16S" / "16S.fasta", "fasta"):
+        retrieved_seqs.append(record.id.split(".")[0])
+    
+    missing = set(accessions) - set(retrieved_seqs)
+    if len(missing) > 0:
+        logger.warning(f"Could not retrieve {len(missing)} 16S rRNA gene sequences.")
+        logger.debug(f"Missing accessions: {', '.join(missing)}")
+
+
+def retrieve_16S_sequences(lpsn_types, output_path, email, input_taxon):
+    
+    logger.info("Retrieving 16S rRNA gene sequences from GenBank.")
+
+    retmax = 10**6
+
+    accessions = [x.rRNA_acc.split(".")[0] for x in lpsn_types if x.rRNA_acc is not None]
+    term = " OR ".join(f"{x}[Accession]" for x in accessions)
+    
+    try:
+        handle = Entrez.esearch(db="nucleotide", term=term, email = email, retmax=retmax)
+        giList = Entrez.read(handle)['IdList']
+    except Exception as e:
+        logger.error(f"Error searching for 16S rRNA gene sequences: {e}")
+        sys.exit(1)
+
+    if len(giList) == 0:
+        logger.warning(f"No 16S rRNA gene sequences found. Continuing without 16S sequences.")
+        search_results = None
+    
+    if len(giList) > 0:
+        try:
+            search_handle = Entrez.epost(db="nucleotide", id=",".join(giList), email=email)
+            search_results = Entrez.read(search_handle)
+            webenv, query_key = search_results["WebEnv"], search_results["QueryKey"] 
+        except Exception as e:
+            logger.error(f"Error posting search results: {e}")
+            sys.exit(1)
+
+    make_dir( output_path / "sequences" / "16S" )
+
+
+    if search_results is not None:
+        with open( output_path / "sequences" / "16S" / "16S.fasta", "w" ) as f:
+            for start in range(0, len(giList), 100):
+                handle = Entrez.efetch(db='nucleotide', rettype="fasta", retmode='text', retstart = start, retmax=100, webenv= webenv, query_key= query_key, email=email)
+                data = handle.read().replace("\n\n", "\n")
+                f.write(data)
+        check_16S_retrieval(output_path, input_taxon, accessions)
+    else:
+        open(output_path / "sequences" / "16S" / "16S.fasta", "a").close()
+
+
+def retrieve_info_from_genbank(lpsn_types, output_path, threads, dev_mode, input_taxon, skip_download):
+    """
+    Retrieve sequences from GenBank for the given LPSN type strains.
+    """
+    logger.info("Step 3 of 4: Retrieving information from GenBank.")
+
+    email, api_key = get_genbank_api_info(dev_mode)
+    lpsn_types = retrieve_ncbi_taxon_ids(lpsn_types, api_key)
+
+    lpsn_types = retrieve_missing_16S_info(lpsn_types, email, api_key)
+    lpsn_types = retrieve_missing_genome_info(lpsn_types, api_key)
+    for type_strain in lpsn_types:
+        if type_strain.genome_acc is not None:
+            type_strain.genome_acc['accession'] = type_strain.genome_acc['accession'].split(".")[0]
+    if skip_download:
+        logger.info("Skipping sequence download steps as per user request.\n")
+        return lpsn_types
+    retrieve_genome_sequences(lpsn_types, output_path, threads, api_key)
+    retrieve_16S_sequences(lpsn_types, output_path, email, input_taxon)
+
+    logger.success("Metadata retrieval from GenBank complete.\n")
+
+    return lpsn_types
+
+
+def retrieve_sequences_workflow(lpsn_types, output_path, threads, dev_mode, input_taxon, skip_download):
+    
+    logger.info("Step 4 of 4: Generating ouputs")
+    output_metadata(lpsn_types, output_path)
+    if skip_download:
+        logger.info("Skipping sequence download steps as per user request.\n")
+        logger.info("###################################")
+        logger.info("###     Ratatoskr finished!     ###")
+        logger.info("###################################\n")
+        return
+    rehydrate_genome_sequences(output_path, threads, input_taxon)
+    tidy_genome_dir(output_path, input_taxon)
+
+    logger.info("Sequence retrieval workflow complete.\n")
+
+    logger.info("###################################")
+    logger.info("###     Ratatoskr finished!     ###")
+    logger.info("###################################\n")
