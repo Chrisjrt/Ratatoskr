@@ -1,7 +1,7 @@
 # Ratatoskr
 
 <p align="center">
-  <img src="./Icon.png" width="300" alt="Ratatoskr logo">
+  <img src="./Icon.png" width="200" alt="Ratatoskr logo">
 </p>
 
 Retrieve 16S rRNA sequences, genome sequences, and metadata for taxonomic type strains
