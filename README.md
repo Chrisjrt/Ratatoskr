@@ -49,17 +49,20 @@ mamba create -n ratatoskr -c conda-forge -c bioconda ratatoskr
 
 ### Source
 
+If installing from source, Ratatoskr requires the following dependencies to also be installed within the users $PATH:
+
+#### Required dependencies
+
+- [ncbi datasets](https://github.com/ncbi/datasets)
+
+To install from source:
+
 ```
 git clone "git@github.com:Fabian-Bastiaanssen/Ratatoskr.git";
 cd Ratatoskr;
 pip install -e .
 ```
 
-If installing from source, Ratatoskr requires the following dependencies to also be installed within the users $PATH:
-
-#### Required dependencies
-
-- [ncbi datasets](https://github.com/ncbi/datasets)
 
 ## Usage
 
@@ -95,24 +98,29 @@ Options:
   --threads         -t  INTEGER RANGE [x>=1]                Number of threads to be used. [default: 1]
   --force           -f                                      Force overwrite of output directory.
   --dev_mode        -d                                      Run in development mode.
+  --skip_download   -s                                      Skip sequence download steps.
   --version         -v                                      Show the version and exit.
   --help            -h                                      Show this message and exit.       
 ```
 
 ### Outputs
 
-Ratatoskr produces ouputs in three folders:
+Ratatoskr produces ouputs in three main folders:
 
-- `16S`:
-  - This folder will contain a single file `16S.fasta` that contains all 16S rRNA sequences found for the taxonomic types.
-- `genomes`:
-  - This will contain two subfolders `fastas` and `genbank` that will contain all genomes found for the taxonomic types in FASTA and GenBank format, respectively.
-  - Each file name genome file will be named after the associated GenBank accession e.g. `GCA_000012305.1.fna` or `GCA_000012305.1.gbff`
-- `metadata`:
-  - This will contain three files: `sequence_metadata.tsv`, `taxonomic_metadata.tsv`, and `phenotypic_metadata.tsv`
-  - `sequence_metadata.tsv` contains information on whether any genome/16S rRNA sequence was found for a type requested, and if so the associated accesssions.
-  - `taxonomic_metadata.tsv` contains the full taxonomic information on the types retrieved, including full taxonomic lineage, references for their provenance and list inclusions, authority, and binomial synonyms. 
-  - `phenotypic_metadata.tsv` contains all phenotypic data from BacDive, including any results from API tests, colony and cellular morphology information, and any culture information that was available. 
+- `taxonomy/`:
+  - `taxonomic_metadata.tsv`: TSV containing full taxonomy, plus additional taxonomy-associated information
+- `sequences/`:
+  - `sequence_metadata.tsv`: TSV containing 16S rRNA accessions, genome accessions, and genome completeness information. 
+  - `16S/`:
+    - `16S.fasta`: Single file containing all downloaded 16S rRNA sequences in FASTA format
+  - `genomes/`:
+    - `fastas/`: Folder containing all downloaded genomes in FASTA format
+    - `genbank/`: Folder containing all downloaded genomes in GenBank format
+- `characteristics`
+  - `API_results/`: Folder containing TSVs describing the results for any API tests associated with the taxon of interest (one file per API test)
+  - `fatty_acid_profile_metadata.tsv`: TSV describing any information on fatty acid profiles for the taxon of interest
+  - `general_characteristics`: TSV describing any general characteristics for the taxon of interest (e.g. Gram stain, motility, cell shape/width/length, Spore formation, and Oxygen_tolerance)
+  - `metabolite_utilisation_metadata.tsv`: TSV describing any metabolite utilisation information associated with the taxon of interest
 
 ### Example
 
