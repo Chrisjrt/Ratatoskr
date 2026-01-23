@@ -116,7 +116,7 @@ Ratatoskr produces ouputs in three main folders:
   - `genomes/`:
     - `fastas/`: Folder containing all downloaded genomes in FASTA format
     - `genbank/`: Folder containing all downloaded genomes in GenBank format
-- `characteristics`
+- `characteristics/`
   - `API_results/`: Folder containing TSVs describing the results for any API tests associated with the taxon of interest (one file per API test)
   - `fatty_acid_profile_metadata.tsv`: TSV describing any information on fatty acid profiles for the taxon of interest
   - `general_characteristics`: TSV describing any general characteristics for the taxon of interest (e.g. Gram stain, motility, cell shape/width/length, Spore formation, and Oxygen_tolerance)
