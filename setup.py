@@ -21,7 +21,7 @@ setup(
     name="ratatoskr",
     # packages=find_packages(where="src"),
     url="https://github.com/Fabian-Bastiaanssen/Ratatoskr",
-    python_requires=">=3.13.2",
+    python_requires=">=3.12",
     description="Ratatoskr: A tool for collecting and downloading taxonomic type stains.",
     long_description=get_description(),
     long_description_content_type="text/markdown",
