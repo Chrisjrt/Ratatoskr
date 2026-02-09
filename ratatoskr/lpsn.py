@@ -12,7 +12,7 @@ import polars as pl
 from ratatoskr.utils import suppress_stdout
 from ratatoskr.misc import get_taxaomic_levels
 from ratatoskr.type_strain import TypeStrain
-
+from ratatoskr.genbank import get_acc_seq_lengths
 accepted_ranks = [
     "domain",
     "kingdom",
@@ -196,19 +196,38 @@ def filter_dataframe(df, input, taxonomic_level):
 
 
 def polars_to_type_strain_list(df):
-    logger.info("Converting LPSN DataFrame to list of TypeStrain objects.")
+    logger.debug("Converting LPSN DataFrame to list of TypeStrain objects.")
     return [TypeStrain(**row) for row in df.rows(named=True)]
 
+def check_lpsn_rRNA_accs(lpsn_hits):
+    logger.info("Checking LPSN rRNA accessions for validity.")
+ 
+    updated_hits = []
+ 
+    accs = [hit.rRNA_acc for hit in lpsn_hits if hit.rRNA_acc is not None]
+   
+    if len(accs) > 0:
+        lengths = get_acc_seq_lengths(accs)
+   
+    for hit in lpsn_hits:
+        if hit.rRNA_acc is not None:
+            if hit.rRNA_acc.split(".")[0] not in lengths:
+                logger.warning(f"rRNA accession {hit.rRNA_acc} for {hit.parent_species} type strain {hit.type_names[0]} is longer than 2000 bp, which may indicate an issue with the sequence. Removing.")
+                hit.rRNA_acc = None
+        updated_hits.append(hit)
+   
+    return updated_hits
    
 def retrieve_LPSN_type_info(input, output_path, threads, level, lpsn_client):
-
+ 
     logger.info("Step 1 of 4: Retrieving taxonomical data from LPSN.")
-
+ 
     taxonomic_level = get_taxaomic_levels(input) if level == "auto" else level
     full_lpsn_df = search_all_lpsn(lpsn_client)
     lpsn_hits = filter_dataframe(full_lpsn_df, input, taxonomic_level)
     lpsn_hits = polars_to_type_strain_list(lpsn_hits)
-    
+    lpsn_hits = check_lpsn_rRNA_accs(lpsn_hits)
+   
     logger.success(f"Retrieved metadata for {len(lpsn_hits)} type strains from LPSN.\n")
-
+ 
     return lpsn_hits

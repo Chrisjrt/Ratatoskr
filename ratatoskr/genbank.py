@@ -46,14 +46,18 @@ def retrieve_ncbi_taxon_ids(lpsn_types, api_key):
     logger.info("Retrieving NCBI Taxon IDs for LPSN type strains.")
     
     query_terms = []
-    
     has_ncbi_taxid, missing_ncbi_taxid = get_haves_and_have_nots(lpsn_types, "species_ncbi_tax_id")
-    
+    missing_ncbi_taxid.extend([x for x in has_ncbi_taxid if x.parent_subspecies is not None])
+    has_ncbi_taxid = [x for x in has_ncbi_taxid if x.parent_subspecies is None]
     for type_strain in missing_ncbi_taxid:
         if type(type_strain.binomial_synonyms) != list:
             type_strain.binomial_synonyms = type_strain.binomial_synonyms.split(",")
+        if type_strain.parent_subspecies is not None:
+            type_strain.binomial_synonyms.append(type_strain.parent_species)
         query_terms.extend(type_strain.binomial_synonyms)
-    
+    logger.debug(f"Retrieving NCBI Taxon IDs for {len(query_terms)} query terms.")
+    logger.debug(query_terms)
+
     pbar = tqdm.tqdm(total=len(query_terms), desc="Requesting NCBI Taxon IDs", unit="query", ncols=100, colour="magenta")
     data_list = asyncio.run(request_ncbi_taxon_ids(query_terms,  api_key, sem=None, pbar=pbar))
 
@@ -73,9 +77,9 @@ def retrieve_ncbi_taxon_ids(lpsn_types, api_key):
                 hits.append(*data_dict.get(synonym))
         type_strain.species_ncbi_tax_id = hits
         if len(hits) > 1:
-            logger.debug(f"Multiple Taxon IDs found for {type_strain.parent_species}. Will carry forward using all matches.")
+            logger.debug(f"Multiple Taxon IDs found for {type_strain.parent_subspecies if type_strain.parent_subspecies is not None else type_strain.parent_species}. Will carry forward using all matches.")
         if len(hits) == 0:
-            logger.debug(f"No Taxon ID found for {type_strain.parent_species}")
+            logger.debug(f"No Taxon ID found for {type_strain.parent_subspecies if type_strain.parent_subspecies is not None else type_strain.parent_species}")
             type_strain.species_ncbi_tax_id = []
 
     return has_ncbi_taxid + missing_ncbi_taxid
@@ -95,7 +99,7 @@ def retrieve_missing_16S_info(lpsn_types, email, api_key):
                 try:
                     handle = Entrez.read(handle)
                 except Exception as e:
-                    logger.error(f"Error reading Entrez handle for type strain {type_strain.parent_species} with taxid {i}: {e}")
+                    logger.error(f"Error reading Entrez handle for type strain {type_strain.parent_subspecies if type_strain.parent_subspecies is not None else type_strain.parent_species} with taxid {i}: {e}")
                     continue
                 if handle.get("Count") != "0":
                     id = handle.get("IdList")
@@ -109,13 +113,13 @@ def retrieve_missing_16S_info(lpsn_types, email, api_key):
             try:
                 strain_search_term = " OR ".join(set([f'("{x.replace(" ", y)}"[Strain])' for x in type_strain.type_names for y in ["_", "-", "."]]))
             except Exception as e:
-                logger.error(f"Error creating strain search term for type strain {type_strain.parent_species}: {e}")
+                logger.error(f"Error creating strain search term for type strain {type_strain.parent_subspecies if type_strain.parent_subspecies is not None else type_strain.parent_species}: {e}")
                 strain_search_term = ""
             try:
                 handle = Entrez.esearch(db="nucleotide", term=f"({binomial_search_term}) AND ({strain_search_term}) AND (16S[Title])", email = email, retmax=10**6)
                 handle = Entrez.read(handle)
             except Exception as e:
-                logger.error(f"Error searching Entrez for type strain {type_strain.parent_species}: {e}")
+                logger.error(f"Error searching Entrez for type strain {type_strain.parent_subspecies if type_strain.parent_subspecies is not None else type_strain.parent_species}: {e}")
                 continue
     
             if handle.get("Count") != "0":
@@ -135,6 +139,7 @@ async def request_ncbi_genomes(query_terms, api_key, pbar):
         "accept": "application/json",
         "api-key": api_key
     }
+    logger.debug(f"Requesting genome information for {len(query_terms)} taxon IDs from GenBank.")
     session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60000),connector=aiohttp.TCPConnector(limit=9))
     sem = asyncio.Semaphore(9)
     urls = [f"https://api.ncbi.nlm.nih.gov/datasets/v2/genome/taxon/{"%2C".join(subset).replace(" ", "%20")}/dataset_report?returned_content=COMPLETE&page_size=1000" for subset in [query_terms[i:i + 100] for i in range(0, len(query_terms), 100)]]
@@ -153,9 +158,10 @@ def retrieve_missing_genome_info(lpsn_types, api_key):
     query_terms = []
     
     has_genome, missing_genome = get_haves_and_have_nots(lpsn_types, "genome_acc")        
-
     query_terms = [str(ncbi_id) for type_strain in missing_genome for ncbi_id in type_strain.species_ncbi_tax_id if type_strain.species_ncbi_tax_id is not None]
-    
+    if len(missing_genome) == 0:
+        logger.info("No missing genome information to retrieve from GenBank. Continuing")
+        return has_genome + missing_genome
     pbar = tqdm.tqdm(total=len(query_terms), desc="Retrieving genome info", unit="type strain", ncols=100, colour="magenta")
     data_list = asyncio.run(request_ncbi_genomes(query_terms, api_key, pbar))
     pbar.close()
@@ -171,6 +177,11 @@ def retrieve_missing_genome_info(lpsn_types, api_key):
     if 'checkm_info' not in df.collect_schema().names():
         df = df.with_columns(pl.struct({'checkm_species_tax_id': None}).alias('checkm_info'))
     df= df.select([pl.col('accession'), pl.col('organism').struct.field("*"), pl.col('assembly_info').struct.field(['assembly_level','biosample']), pl.col('checkm_info').struct.field('checkm_species_tax_id').alias('checkm_tax_id'), ])
+    if 'strain' not in df.collect_schema().get('infraspecific_names').to_schema():
+        df = df.with_columns(pl.col('infraspecific_names').struct.with_fields(strain=pl.lit(None)))
+    if 'strain' not in df.collect_schema().get('biosample').to_schema():
+        df = df.with_columns(pl.col('biosample').struct.with_fields(strain=pl.lit(None)))
+
     df = df.with_columns(pl.col('infraspecific_names').struct.field("strain").alias('infraspecific_names'), pl.col('biosample').struct.field('strain').alias('biosample'))
     enum_type = pl.Enum(("Complete Genome", "Chromosome", "Scaffold", "Contig"))
     df = df.with_columns(strain=pl.concat_list(pl.col('biosample'), pl.col('infraspecific_names')).list.unique()).unique().sort(pl.col('assembly_level').cast(enum_type)).collect().group_by('tax_id').all()
@@ -181,16 +192,16 @@ def retrieve_missing_genome_info(lpsn_types, api_key):
             try:
                 if type(type_strain.type_names) == str:
                     type_strain.type_names = [ts.strip() for ts in type_strain.type_names.split(",")]
-                strain_filtered = filtered.explode(['accession', 'assembly_level', 'strain']).filter(pl.col('strain').list.eval(pl.element().is_in(type_strain.type_names)).list.any())
+                strain_filtered = filtered.explode(['accession', 'assembly_level', 'strain']).filter(pl.col('strain').list.eval(pl.element().is_in(type_strain.type_names, nulls_equal=True)).list.any())
             except Exception as e:
                 logger.error(f"Error filtering strains for {type_strain}: {e}")
             if len(strain_filtered) > 0:
                 best_hit = strain_filtered.rows(named=True)[0]
                 type_strain.genome_acc = {"accession": best_hit['accession'].split('.')[0], "assembly level": best_hit['assembly_level']}
             else:
-                logger.debug(f"No genome data found for {type_strain.parent_species} matching type strain names. Just FYI")
+                logger.debug(f"No genome data found for {type_strain.parent_subspecies if type_strain.parent_subspecies is not None else type_strain.parent_species} matching type strain names. Just FYI")
         else:
-            logger.debug(f"No genome data found for {type_strain.parent_species}. Just FYI")
+            logger.debug(f"No genome data found for {type_strain.parent_subspecies if type_strain.parent_subspecies is not None else type_strain.parent_species}. Just FYI")
         
 
     return has_genome + missing_genome
@@ -201,7 +212,7 @@ def retrieve_genome_sequences(lpsn_types, output_path, threads, api_key):
     logger.info("Retrieving genome sequences from GenBank.")
 
     has_genome_seq, missing_genome_seq = get_haves_and_have_nots(lpsn_types, "genome_acc")
-
+    logger.info(f"{len(has_genome_seq)} type strains already have genome sequence information. Retrieving sequences for remaining {len(missing_genome_seq)} type strains.")
     with open(output_path / "genome_accessions.txt", "w") as f:
         accessions = {
             x.genome_acc["accession"]
@@ -260,7 +271,22 @@ def check_16S_retrieval(output_path, input_taxon, accessions):
         logger.warning(f"Could not retrieve {len(missing)} 16S rRNA gene sequences.")
         logger.debug(f"Missing accessions: {', '.join(missing)}")
 
-
+def get_acc_seq_lengths(acc_list):
+ 
+    accessions = [x.split(".")[0] for x in acc_list]
+    term = " OR ".join(f"{x}[Accession]" for x in accessions)
+    try:
+        handle = Entrez.esearch(db="nuccore", term=f"{term}", retmax=10**6)
+        handle = Entrez.read(handle)
+        if handle.get("Count") != "0":
+            id = handle.get("IdList")
+            record = [x for x in Entrez.read(Entrez.esummary(db="nuccore", id=id)) if 1000 <= int(x.get("Length")) <= 2500 and x.get("Status") == "live" and len(x.get("AccessionVersion")) < 12]
+            return [x.get("AccessionVersion").split(".")[0] for x in record if x.get("AccessionVersion").split(".")[0] in accessions]
+       
+    except Exception as e:
+        logger.error(f"Error reading Entrez handle for sequence length retrieval: {e}")
+        return []
+ 
 def retrieve_16S_sequences(lpsn_types, output_path, email, input_taxon):
     
     logger.info("Retrieving 16S rRNA gene sequences from GenBank.")
@@ -304,13 +330,11 @@ def retrieve_16S_sequences(lpsn_types, output_path, email, input_taxon):
         open(output_path / "sequences" / "16S" / "16S.fasta", "a").close()
 
 
-def retrieve_info_from_genbank(lpsn_types, output_path, threads, dev_mode, input_taxon, skip_download):
+def retrieve_info_from_genbank(lpsn_types, output_path, threads, dev_mode, input_taxon, skip_download, email=None, api_key=None):
     """
     Retrieve sequences from GenBank for the given LPSN type strains.
     """
     logger.info("Step 3 of 4: Retrieving information from GenBank.")
-
-    email, api_key = get_genbank_api_info(dev_mode)
     lpsn_types = retrieve_ncbi_taxon_ids(lpsn_types, api_key)
 
     lpsn_types = retrieve_missing_16S_info(lpsn_types, email, api_key)

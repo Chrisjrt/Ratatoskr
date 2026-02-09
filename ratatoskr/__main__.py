@@ -10,7 +10,7 @@ import rich_click as click
 from ratatoskr.utils import get_version
 from ratatoskr.initialisation import set_up_logger, initialise_clients
 from ratatoskr.lpsn import retrieve_LPSN_type_info
-from ratatoskr.genbank import retrieve_info_from_genbank, retrieve_sequences_workflow
+from ratatoskr.genbank import retrieve_info_from_genbank, retrieve_sequences_workflow, get_genbank_api_info
 from ratatoskr.bacdive import retrieve_extra_info_from_bacdive
 
 ######################################
@@ -114,11 +114,12 @@ def run(ctx, input, output_path, threads, force, level, dev_mode, skip_download)
     Run the ratatoskr pipeline
     """
 
-    set_up_logger(output_path, force, debug=dev_mode) 
+    set_up_logger(output_path, force, debug=dev_mode)
+    email, api_key = get_genbank_api_info(dev_mode) 
     lpsn_client, bacdive_client = initialise_clients(dev_mode)
     lpsn_types = retrieve_LPSN_type_info(input, output_path, threads, level, lpsn_client)
     lpsn_types = retrieve_extra_info_from_bacdive(lpsn_types, bacdive_client)
-    lpsn_types = retrieve_info_from_genbank(lpsn_types, output_path, threads, dev_mode, input, skip_download)
+    lpsn_types = retrieve_info_from_genbank(lpsn_types, output_path, threads, dev_mode, input, skip_download, email=email, api_key=api_key)
     retrieve_sequences_workflow(lpsn_types, output_path, threads, dev_mode, input, skip_download)
 
 

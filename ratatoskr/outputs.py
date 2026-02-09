@@ -1,6 +1,5 @@
 import polars as pl
 from pathlib import Path
-
 from ratatoskr.utils import make_dir
 
 phenotypic_attrs = ["morphology_cell", "spore_formation", "oxygen_tolerance", "isolation_sample_type", 
@@ -243,7 +242,7 @@ def output_general_characteristics(lpsn_types, output_path):
 
 
 def output_sequence_metadata(lpsn_types, output_path):
-
+    make_dir( output_path / "sequences" )
     genomic_tsv = ["\t".join(["Name", "rRNA_accession", "Genome_accession", "Genome_completeness"])]
     
     for ts in lpsn_types:

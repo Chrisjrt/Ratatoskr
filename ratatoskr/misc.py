@@ -59,7 +59,10 @@ def get_haves_and_have_nots(lpsn_types, attribute_name):
     has_not = []
     for x in lpsn_types:
         if getattr(x, attribute_name) is not None:
-            has.append(x)
+            if getattr(x, attribute_name) != [] and getattr(x, attribute_name) != "":
+                has.append(x)
+            else:
+                has_not.append(x)
         else:
             has_not.append(x)
     return has, has_not
