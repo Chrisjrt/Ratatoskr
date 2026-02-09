@@ -11,7 +11,6 @@ Retrieve 16S rRNA sequences, genome sequences, and metadata for taxonomic type s
 The easiest way to install Ratatoskr is via conda:
 
 ```
-*doesn't work yet*
 conda install -c conda-forge -c bioconda ratatoskr
 ```
 
@@ -95,7 +94,7 @@ Options:
   --output_path     -o  PATH                                Specify the desired path for creation of the output folder [required]
   --level           -l  [domain|kingdom|phylum|class|       Specify the taxanomic level to check for your taxon. [default: auto]
                           order|family|genus|species|auto]  
-  --threads         -t  INTEGER RANGE [x>=1]                Number of threads to be used. [default: 1]
+  --threads         -t  INTEGER RANGE [x>=1]                Number of threads to be used (only impacts downloading). [default: 1]
   --force           -f                                      Force overwrite of output directory.
   --dev_mode        -d                                      Run in development mode.
   --skip_download   -s                                      Skip sequence download steps.
@@ -135,3 +134,4 @@ ratatoskr run --input Lachnospiraceae --output output/Lachnospiraceae
 If you publish results from Ratatoskr please cite the following:
 
 https://github.com/Fabian-Bastiaanssen/Ratatoskr
+https://www.biorxiv.org/content/10.64898/2026.01.26.700362v1
