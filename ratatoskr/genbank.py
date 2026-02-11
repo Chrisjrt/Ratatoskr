@@ -274,18 +274,36 @@ def check_16S_retrieval(output_path, input_taxon, accessions):
 def get_acc_seq_lengths(acc_list):
  
     accessions = [x.split(".")[0] for x in acc_list]
-    term = " OR ".join(f"{x}[Accession]" for x in accessions)
-    try:
-        handle = Entrez.esearch(db="nuccore", term=f"{term}", retmax=10**6)
-        handle = Entrez.read(handle)
-        if handle.get("Count") != "0":
-            id = handle.get("IdList")
-            record = [x for x in Entrez.read(Entrez.esummary(db="nuccore", id=id)) if 1000 <= int(x.get("Length")) <= 2500 and x.get("Status") == "live" and len(x.get("AccessionVersion")) < 12]
-            return [x.get("AccessionVersion").split(".")[0] for x in record if x.get("AccessionVersion").split(".")[0] in accessions]
-       
-    except Exception as e:
-        logger.error(f"Error reading Entrez handle for sequence length retrieval: {e}")
+    if not accessions:
         return []
+
+    # Entrez has practical limits on query length; split into smaller runs to avoid errors.
+    max_terms = 200
+    valid_accessions = set()
+
+    for start in range(0, len(accessions), max_terms):
+        subset = accessions[start:start + max_terms]
+        term = " OR ".join(f"{x}[Accession]" for x in subset)
+        try:
+            handle = Entrez.esearch(db="nuccore", term=term, retmax=10**6)
+            handle = Entrez.read(handle)
+            if handle.get("Count") != "0":
+                ids = handle.get("IdList")
+                record = [
+                    x for x in Entrez.read(Entrez.esummary(db="nuccore", id=ids))
+                    if 1000 <= int(x.get("Length")) <= 2500
+                    and x.get("Status") == "live"
+                    and len(x.get("AccessionVersion")) < 12
+                ]
+                valid_accessions.update(
+                    x.get("AccessionVersion").split(".")[0]
+                    for x in record
+                    if x.get("AccessionVersion")
+                )
+        except Exception as e:
+            logger.error(f"Error reading Entrez handle for sequence length retrieval: {e}")
+
+    return [x for x in accessions if x in valid_accessions]
  
 def retrieve_16S_sequences(lpsn_types, output_path, email, input_taxon):
     
