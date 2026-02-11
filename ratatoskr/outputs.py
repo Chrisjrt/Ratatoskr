@@ -217,6 +217,10 @@ def output_taxonomy(lpsn_types, output_path):
                      "strain_ncbi_tax_id"])]
     
     for ts in lpsn_types:
+        if ts.type_names is None:
+            ts.type_names = [""]
+        if len(ts.type_names) == 0:
+            ts.type_names = [""]
         type_name = " ".join([ts.parent_subspecies, ts.type_names[0]] if ts.parent_subspecies is not None else [ts.parent_species, ts.type_names[0]])
         taxonomic_tsv.append(get_taxonomic_data(ts, type_name))
     
