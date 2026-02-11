@@ -68,12 +68,11 @@ def get_sample_isolation_info(record):
 
 def get_strain_designations(record):
     
-    culture_ids = [x.strip() for x in record.get("Literature", {}).get("culture collection no.", "").split(',')]
+    culture_ids = [x.strip() for x in record.get("External links", {}).get("culture collection no.", "").split(',')]
     # the re below is because some strain designations have a trailing ' T' to indicate type strain for some reason
     strain_designations = [re.sub(r" T$", "", x.strip()) for x in record.get("Name and taxonomic classification", {}).get("strain designation", "").split(',') if x.strip() != '']
-    
     final_names = set(culture_ids + strain_designations)
-
+    
     return final_names
 
 
