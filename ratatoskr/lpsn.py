@@ -212,7 +212,7 @@ def check_lpsn_rRNA_accs(lpsn_hits):
     for hit in lpsn_hits:
         if hit.rRNA_acc is not None:
             if hit.rRNA_acc.split(".")[0] not in lengths:
-                logger.warning(f"rRNA accession {hit.rRNA_acc} for {hit.parent_species} type strain {hit.type_names[0]} is longer than 2000 bp, which may indicate an issue with the sequence. Removing.")
+                logger.warning(f"rRNA accession {hit.rRNA_acc} for {hit.parent_species} type strain {hit.type_names[0]} is shorter than 1000 bp or longer than 2000 bp, which may indicate an issue with the sequence. Removing.")
                 hit.rRNA_acc = None
         updated_hits.append(hit)
    
