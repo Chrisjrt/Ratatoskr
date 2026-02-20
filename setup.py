@@ -39,7 +39,7 @@ setup(
         "polars>=1.32.2",
         "pyarrow>=13.0.0",
         "rich-click>=1.8.8",
-        "setuptools<=80",
+        "setuptools>=80",
         "tqdm>=4.66.1",
     ],
     entry_points={"console_scripts": ["ratatoskr=ratatoskr.__main__:main"]},
