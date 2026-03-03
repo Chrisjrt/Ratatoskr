@@ -1,7 +1,9 @@
+from importlib import resources
 import sys
 
 from loguru import logger
 from async_dsmz import lpsn_async
+import pickle as pkl
 import tqdm
 import os
 import asyncio
@@ -199,26 +201,68 @@ def polars_to_type_strain_list(df):
     logger.debug("Converting LPSN DataFrame to list of TypeStrain objects.")
     return [TypeStrain(**row) for row in df.rows(named=True)]
 
-def check_lpsn_rRNA_accs(lpsn_hits):
+
+def load_rRNA_cache(cache = None, no_cache=False):
+    logger.info(f"Loading rRNA accession cache from {cache}.")
+    if no_cache:
+        logger.info("Skipping cache loading due to --no_cache flag.")
+        return {"good": set(), "bad": set()}
+    
+    if cache is None:
+        rRNA_cache_path = resources.files("ratatoskr.data").joinpath("rRNA_cache.pkl")
+        if rRNA_cache_path.exists():
+            logger.info("No cache path provided, loading default cache from package resources.")
+            with rRNA_cache_path.open("rb") as f:
+                rRNA_cache = pkl.load(f)
+        else:
+            logger.warning("No rRNA cache path provided and default rRNA cache file does not exist. Starting with empty cache.")
+            rRNA_cache = {"good": set(), "bad": set()}
+    else:
+        if os.path.exists(cache):
+            logger.debug(f"Loading rRNA accession cache from {cache}.")
+            with open(cache, "rb") as f:
+                rRNA_cache = pkl.load(f)
+        else:
+            logger.warning(f"Cache file {cache} does not exist. Starting with empty cache.")
+            rRNA_cache = {"good": set(), "bad": set()}
+
+    return rRNA_cache
+
+
+def check_lpsn_rRNA_accs(lpsn_hits, dev_mode, no_cache, cache=None):
+    
     logger.info("Checking LPSN rRNA accessions for validity.")
- 
+
+    rRNA_cache = load_rRNA_cache(cache, no_cache)
+
+    all_accs = set([hit.rRNA_acc for hit in lpsn_hits if hit.rRNA_acc is not None])
+    accs_needing_checked = all_accs - rRNA_cache["good"] - rRNA_cache["bad"]
+   
+    good_lengths = set()
+    if len(accs_needing_checked) > 0:
+        good_lengths = get_acc_seq_lengths(accs_needing_checked)
+    good_lengths = set(good_lengths) | rRNA_cache["good"]
+   
     updated_hits = []
- 
-    accs = [hit.rRNA_acc for hit in lpsn_hits if hit.rRNA_acc is not None]
-   
-    if len(accs) > 0:
-        lengths = get_acc_seq_lengths(accs)
-   
     for hit in lpsn_hits:
         if hit.rRNA_acc is not None:
-            if hit.rRNA_acc.split(".")[0] not in lengths:
+            if hit.rRNA_acc.split(".")[0] not in good_lengths:
                 logger.warning(f"rRNA accession {hit.rRNA_acc} for {hit.parent_species} type strain {hit.type_names[0]} is shorter than 1000 bp or longer than 2000 bp, which may indicate an issue with the sequence. Removing.")
                 hit.rRNA_acc = None
         updated_hits.append(hit)
-   
+
+    if dev_mode and cache is not None:
+        logger.info("Updating rRNA accession cache with new information.")
+        rRNA_cache["good"] = good_lengths
+        rRNA_cache["bad"] = all_accs - good_lengths
+        logger.debug(f"Saving rRNA accession cache to {cache}.")
+        with open(cache, "wb") as f:
+            pkl.dump(rRNA_cache, f)
+    
     return updated_hits
+
    
-def retrieve_LPSN_type_info(input, output_path, threads, level, lpsn_client):
+def retrieve_LPSN_type_info(input, output_path, threads, level, lpsn_client, dev_mode, no_cache, cache):
  
     logger.info("Step 1 of 4: Retrieving taxonomical data from LPSN.")
  
@@ -226,7 +270,7 @@ def retrieve_LPSN_type_info(input, output_path, threads, level, lpsn_client):
     full_lpsn_df = search_all_lpsn(lpsn_client)
     lpsn_hits = filter_dataframe(full_lpsn_df, input, taxonomic_level)
     lpsn_hits = polars_to_type_strain_list(lpsn_hits)
-    lpsn_hits = check_lpsn_rRNA_accs(lpsn_hits)
+    lpsn_hits = check_lpsn_rRNA_accs(lpsn_hits, dev_mode, no_cache, cache)
    
     logger.success(f"Retrieved metadata for {len(lpsn_hits)} type strains from LPSN.\n")
  
