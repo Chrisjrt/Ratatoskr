@@ -8,10 +8,10 @@ Retrieve 16S rRNA sequences, genome sequences, and metadata for taxonomic type s
 
 ## Quick Start
 
-The easiest way to install Ratatoskr is via conda:
+The easiest way to install Ratatoskr is via conda/mamba:
 
 ```
-conda install -c conda-forge -c bioconda ratatoskr
+mamba install -c conda-forge -c bioconda ratatoskr
 ```
 
 Run ratatoskr as follows:
@@ -42,7 +42,6 @@ The NCBI API key and DSMZ email/password will be required to use Ratatoskr. A pr
 ### Bioconda
 
 ```
-*doesn't work yet*
 mamba create -n ratatoskr -c conda-forge -c bioconda ratatoskr
 ```
 
@@ -98,6 +97,8 @@ Options:
   --force           -f                                      Force overwrite of output directory.
   --dev_mode        -d                                      Run in development mode.
   --skip_download   -s                                      Skip sequence download steps.
+  --no_cache        -n                                      Don't use 16S rRNA cache information.
+  --cache           -c  TEXT                                FOR DEV MODE ONLY: Path to create new cache file.
   --version         -v                                      Show the version and exit.
   --help            -h                                      Show this message and exit.       
 ```
@@ -131,7 +132,14 @@ ratatoskr run --input Lachnospiraceae --output output/Lachnospiraceae
 
 ## Citation
 
-If you publish results from Ratatoskr please cite the following:
+If you publish results from Ratatoskr please cite the following article:
 
-https://github.com/Fabian-Bastiaanssen/Ratatoskr
-https://www.biorxiv.org/content/10.64898/2026.01.26.700362v1
+Ratatoskr: A tool for automated retrieval of taxonomic type strain sequences and metadata,
+Turkington C., Bastiaanssen F.T.S., Nezam-Abadi N., Shkoporov A., Hill C.
+bioRxiv., 2026.01.26.700362; 2026; doi: https://doi.org/10.64898/2026.01.26.700362
+
+Please also cite the APIs for [LPSN](https://github.com/LeibnizDSMZ/lpsn-api), [BacDive](https://github.com/JKoblitz/bacdive-api), and [NCBI datasets](https://github.com/ncbi/datasets) as Ratatoskr usefulness is in no small part due to these, for instance:
+
+> ... type strain sequences and metadata were downloaded using Ratatoskr (Turkington, 2026), which accesses the LPSN (Freese, 2025), BacDive (Schober, 2025), and NCBI Datasets (O’Leary, 2026) API’s to retrieve up-to-date nomenclature type strains and their sequence data
+
+N.B. the citations in the example above are those recommended for citation at time of writing and may since have been updated. Please check with each API for the current recommended citation. 
