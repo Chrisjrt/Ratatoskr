@@ -99,20 +99,6 @@ def main_cli():
         required=False,
         is_flag=True
     )
-@click.option(
-        "-n",
-        "--no_cache",
-        help="Don't use 16S rRNA cache information.",
-        required=False,
-        is_flag=True
-    )
-@click.option(
-        "-c",
-        "--cache",
-        help="FOR DEV MODE ONLY: Path to create new cache file.",
-        type=str,
-        required=False,
-)
 
 #########################################
 
@@ -122,7 +108,7 @@ def main_cli():
 @click.help_option("--help", "-h")
 @click.pass_context
 
-def run(ctx, input, output_path, threads, force, level, dev_mode, skip_download, no_cache, cache): 
+def run(ctx, input, output_path, threads, force, level, dev_mode, skip_download): 
 
     """
     Run the ratatoskr pipeline
@@ -131,7 +117,7 @@ def run(ctx, input, output_path, threads, force, level, dev_mode, skip_download,
     set_up_logger(output_path, force, debug=dev_mode)
     email, api_key = get_genbank_api_info(dev_mode) 
     lpsn_client, bacdive_client = initialise_clients(dev_mode)
-    lpsn_types = retrieve_LPSN_type_info(input, output_path, threads, level, lpsn_client, dev_mode, no_cache, cache)
+    lpsn_types = retrieve_LPSN_type_info(input, output_path, threads, level, lpsn_client)
     lpsn_types = retrieve_extra_info_from_bacdive(lpsn_types, bacdive_client)
     lpsn_types = retrieve_info_from_genbank(lpsn_types, output_path, threads, dev_mode, input, skip_download, email=email, api_key=api_key)
     retrieve_sequences_workflow(lpsn_types, output_path, threads, dev_mode, input, skip_download)
