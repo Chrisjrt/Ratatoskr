@@ -271,9 +271,8 @@ def check_16S_retrieval(output_path, input_taxon, accessions):
         logger.warning(f"Could not retrieve {len(missing)} 16S rRNA gene sequences.")
         logger.debug(f"Missing accessions: {', '.join(missing)}")
 
-
 def get_acc_seq_lengths(acc_list):
-
+ 
     accessions = [x.split(".")[0] for x in acc_list]
     if not accessions:
         return []
@@ -301,11 +300,10 @@ def get_acc_seq_lengths(acc_list):
                     for x in record
                     if x.get("AccessionVersion")
                 )
-        except Exception:
-            logger.exception("Error reading Entrez handle for sequence length retrieval")
+        except Exception as e:
+            logger.error(f"Error reading Entrez handle for sequence length retrieval: {e}")
 
     return [x for x in accessions if x in valid_accessions]
-
  
 def retrieve_16S_sequences(lpsn_types, output_path, email, input_taxon):
     
